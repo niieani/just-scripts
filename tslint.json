@@ -1,0 +1,10 @@
+{
+  "extends": "tslint-config-standard",
+  "rules": {
+    "typedef-whitespace": [false],
+    "space-before-function-paren": [false],
+    "trailing-comma": [
+      true
+    ]
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "name": "just-scripts",
+  "version": "1.0.0",
+  "description": "NPM scripts on steroids",
+  "main": "dist/index.js",
+  "repository": "https://github.com/niieani/just-scripts.git",
+  "author": "Bazyli Brzóska <bazyli.brzoska@gmail.com> (https://invent.life/)",
+  "license": "MIT",
+  "scripts": {
+    "test": "jest --no-cache"
+  },
+  "devDependencies": {
+    "@types/chalk": "^0.4.31",
+    "@types/jest": "^18.1.1",
+    "@types/node": "^7.0.5",
+    "@types/ramda": "^0.0.3",
+    "@types/yargs": "^6.6.0",
+    "jest": "^18.1.0",
+    "ts-jest": "^18.0.3",
+    "tslint": "^4.4.2",
+    "tslint-config-standard": "^4.0.0",
+    "typescript": "next"
+  },
+  "dependencies": {
+    "@cycle/run": "rc",
+    "chalk": "^1.1.3",
+    "cross-spawn": "^5.0.1",
+    "interpret": "^1.0.1",
+    "npm-path": "^2.0.3",
+    "ramda": "^0.23.0",
+    "string-argv": "^0.0.2",
+    "supports-color": "^3.2.3",
+    "tree-kill": "^1.1.0",
+    "tslib": "^1.5.0",
+    "yargs": "^6.6.0"
+  },
+  "jest": {
+    "moduleFileExtensions": [
+      "js",
+      "ts"
+    ],
+    "transform": {
+      "^.+\\.(ts|tsx)$": "<rootDir>/node_modules/ts-jest/preprocessor.js"
+    },
+    "testResultsProcessor": "<rootDir>/node_modules/ts-jest/coverageprocessor.js",
+    "testRegex": "\\.spec\\.(ts|js)x?$",
+    "testEnvironment": "node",
+    "collectCoverage": false,
+    "collectCoverageFrom": [
+      "src/**/*^(d\\.)\\.{js,ts}"
+    ],
+    "coverageDirectory": "<rootDir>/__coverage__",
+    "coverageReporters": [
+      "text",
+      "json"
+    ],
+    "globals": {
+      "__TS_CONFIG__": "tsconfig.test.json"
+    }
+  }
+}
