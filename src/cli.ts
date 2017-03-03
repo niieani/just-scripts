@@ -5,6 +5,7 @@ import * as path from 'path'
 import * as fs from 'fs'
 import {WithSubCommand} from './definition'
 import {extensions, ModuleDescriptor} from 'interpret'
+import start from './index'
 
 export interface PackageJson {
   scripts? : {
@@ -57,7 +58,7 @@ type ConfigResolverModule<T> = ConfigResolver<T> | ConfigResolverDefaultExport<T
 
 async function tryLoadModule<T>(filename : string, iteration : number = 0, stopBeforeIndex = extensionLoaders.length) : Promise<T | undefined> {
   const loader = extensionLoaders[iteration]
-  const pathToTry = path.resolve(path.join(filename, loader.extension))
+  const pathToTry = path.resolve(`${filename}${loader.extension}`)
   const exists = await new Promise<fs.Stats | undefined>((resolve, reject) =>
     fs.stat(pathToTry, (err, value) => err ? resolve() : resolve(value)))
   if (exists) {
@@ -87,7 +88,7 @@ async function tryLoadConfig(requiredModule : ConfigResolverModule<WithSubComman
 }
 
 async function run() {
-  const configModule = await tryLoadModule<ConfigResolverModule<WithSubCommand>>('.justscripts')
+  const configModule = await tryLoadModule<ConfigResolverModule<WithSubCommand>>('just-scripts')
   const moduleConfig = configModule ? await tryLoadConfig(configModule) : {}
   const packageJson = loadPackageJson() || {}
   const {version} = packageJson
@@ -118,6 +119,7 @@ async function run() {
         internalArguments = internalArguments.env ? {...internalArguments, env: coerceEnv(internalArguments.env)} : internalArguments
         const {env} = internalArguments
         console.log(env, commandDefinition, passAlongArgv)
+        start(commandDefinition)
       }
     })
   })

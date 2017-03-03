@@ -2,9 +2,8 @@ import xs, {Stream, MemoryStream} from 'xstream'
 import {run} from '@cycle/run'
 import {makeSpawnDriver, SpawnDefinition, CommandSpawnEmit, SpawnOnce} from './spawn'
 import {makeTerminalDriver, TerminalLogDefinition, TerminalEmit} from './terminal'
-import { CommandDefinition, CommandDefinitionArray, ChainType, WithSingleTask, WithEnv, WithChainTask } from './definition'
-import {getCommandFromString} from './util'
-import * as crossPathEnv from 'npm-path'
+import { CommandDefinition, CommandDefinitionArray, ChainType, WithSubCommand, WithSingleTask, WithEnv, WithChainTask } from './definition'
+import {getCommandFromString, mergeEnvPreservingPaths, getEnvWithBin} from './util'
 import {uniq} from 'ramda'
 // WithSubCommand,
 // import {adapt} from '@cycle/run/lib/adapt'
@@ -21,19 +20,6 @@ interface Sources {
 interface Sinks {
   commands$ : Stream<SpawnDefinition>,
   terminal$ : Stream<TerminalLogDefinition>,
-}
-
-type filter<T, TOut> = (callbackfn: (value: T, index: number, array: T[]) => any, thisArg?: any) => TOut[]
-
-function mergeEnvPreservingPaths(...env : Array<{env? : string, [property : string] : string | undefined} | undefined>) {
-  let finalPath = ''
-  const paths = (env.filter as filter<typeof env[0], {env : string}>)(o => !!o && !!o.env)
-    .map(o => o.env[crossPathEnv.PATH] ? o.env[crossPathEnv.PATH].split(crossPathEnv.SEPARATOR) : [])
-  const flatPaths = ([] as Array<string>).concat(...paths).reverse()
-  const uniquePaths = uniq(flatPaths)
-  return Object.assign({}, ...env, {
-    [crossPathEnv.PATH]: uniquePaths.join(crossPathEnv.SEPARATOR)
-  })
 }
 
 function chainDefinitions(definitions : Array<SpawnDefinition>, logic : ChainType = 'and', groupPath : Array<string | number> = [], chainDependency? : SpawnOnce) {
@@ -69,10 +55,6 @@ function chainDefinitions(definitions : Array<SpawnDefinition>, logic : ChainTyp
       return definitions
   }
 }
-
-// export function convertCommandDefinitionToSpawnDefinition(name : string, descriptor : CommandDefinition, parentEnv = {}, additionalArgs = [], chainType : ChainType = 'and', once? : SpawnOnce, depth = 0, groupPath : Array<string | number> = []) {
-
-// }
 
 export function convertCommandToSpawnDefinition(name : string, descriptor : CommandDefinition, parentEnv = {}, additionalArgs = [], chainType : ChainType = 'and', chainDependency? : SpawnOnce, depth = 0, groupPath : Array<string | number> = [name]) : {chainType: ChainType, tasks: Array<SpawnDefinition>, groupPath: Array<string | number>} {
   if (Array.isArray(descriptor)) {
@@ -112,7 +94,7 @@ export function convertCommandToSpawnDefinition(name : string, descriptor : Comm
     throw new Error('envFile parsing not implemented yet')
   }
   const mergedEnv = mergeEnvPreservingPaths(
-    preferLocalEnv ? {...process.env, [crossPathEnv.PATH]: crossPathEnv.get()} : process.env,
+    preferLocalEnv ? getEnvWithBin() : process.env,
     parentEnv,
     withEnv.env,
   )
@@ -125,7 +107,6 @@ export function convertCommandToSpawnDefinition(name : string, descriptor : Comm
       envFromCommand,
     )
     const args = [...argsFromCommand, ...additionalArgs]
-    if (command === 'command4') { debugger }
     return {
       chainType,
       groupPath,
@@ -163,16 +144,14 @@ export function convertCommandToSpawnDefinition(name : string, descriptor : Comm
 }
 
 export default function start(commandDefinition : CommandDefinition) {
+  const {tasks} = convertCommandToSpawnDefinition('main', commandDefinition)
   function main ({commands$, terminal$} : Sources) : Sinks {
-    const inputCommand$ = xs.fromArray([
-      {id : '1', command : 'bash', args: ['-c', 'echo START1 && sleep 3 && echo END1']},
-      {id : '2', command : 'bash', args: ['-c', 'echo START2 && sleep 1 && echo END2']}
-    ])
+    const inputCommand$ = xs.fromArray(tasks)
 
     // const mirrorInput = terminal$.map(io => ({log: ' :: ' + io.stdin.toString()}))
 
     const terminalOutput$ = commands$
-      .map(c => ({log: JSON.stringify(c) + '\n'}))
+      .map(c => ({log: JSON.stringify(c.type === 'stdout' && c.console) + '\n'}))
 
     return {
       commands$: inputCommand$,
