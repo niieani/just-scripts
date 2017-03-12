@@ -5,7 +5,7 @@ import xstream, {Stream} from 'xstream'
 import fromEvent from 'xstream/extra/fromEvent'
 
 import {ChildProcess, SpawnOptions} from 'child_process'
-import * as treeKill from 'tree-kill'
+import treeKill = require('tree-kill')
 
 /**
  * send from another driver (terminal-driver, initialized with args)
@@ -39,59 +39,102 @@ export interface SpawnOnce {
   type : ConditionType,
   allOf? : Array<IdType>,
   anyOf? : Array<IdType>,
-  meta? : any,
+  definition? : any,
 }
 
-export type CommandDefinitionStream = Stream<SpawnDefinition>
+export interface ProcessControl {
+  type: 'spawn' | 'kill'
+  definition : SpawnDefinition
+  signal? : Signal
+}
 
-export interface CommandSpawnOutput {
-  meta : any,
+// export type CommandDefinitionStream = Stream<SpawnDefinition>
+export type ProcessControlStream = Stream<ProcessControl>
+
+export interface CommandDriverOutput {
+  definition : SpawnDefinition,
+}
+
+export interface CommandSpawnOutput extends CommandDriverOutput {
   console : string | Buffer,
   type : 'stdout' | 'stderr',
 }
 
 export type Signal = 'SIGHUP' | 'SIGINT' | 'SIGQUIT' | 'SIGILL' | 'SIGABRT' | 'SIGFPE' | 'SIGKILL' | 'SIGSEGV' | 'SIGPIPE' | 'SIGALRM' | 'SIGTERM' | 'SIGUSR1' | 'SIGUSR2' | 'SIGCHLD' | 'SIGCONT' | 'SIGSTOP' | 'SIGTSTP' | 'SIGTTIN' | 'SIGTTOU'
 
-export interface CommandSpawnClose {
+export interface CommandSpawnOpen extends CommandDriverOutput {
+  type : 'open',
+  process : ChildProcess,
+}
+
+export interface CommandSpawnClose extends CommandDriverOutput {
   type : 'close',
   code : number,
   signal : null | Signal,
 }
 
-export type CommandSpawnEmit = CommandSpawnOutput | CommandSpawnClose
+export interface CommandSpawnKilled extends CommandDriverOutput {
+  type : 'killed'
+  signal : Signal
+  process : ChildProcess
+}
+
+export type CommandSpawnEmit = CommandSpawnOutput | CommandSpawnClose | CommandSpawnOpen | CommandSpawnKilled
 export const forwardedSignals = ['SIGINT', 'SIGTERM', 'SIGBREAK', 'SIGHUP'] as Array<Signal>
 
 export function makeSpawnDriver () {
-  return function spawnDriver (commandsToStart$ : CommandDefinitionStream, name : string) {
-    const runningProcesses = new Set<ChildProcess>()
+  return function spawnDriver (processControl$ : ProcessControlStream, name : string) {
+    // const runningProcesses = new Set<ChildProcess>()
+    const runningProcesses = new Map<SpawnDefinition, ChildProcess>()
+    const killAll = (signal : Signal) => runningProcesses.forEach(child => treeKill(child.pid, signal))
     const output$ = xstream.create<CommandSpawnEmit>({
       start: function (listener) {
-        commandsToStart$.subscribe({
-          next: ({meta, command, args = [], options = {}}) => {
-            // const options = {stdio: 'inherit', env}
-            const proc = spawn(command, args, options)
-            const getDataListener = (type : 'stdout' | 'stderr') =>
-              (chunk : string | Buffer) => listener.next({meta, console: chunk.toString(), type})
-            const stdoutListener = getDataListener('stdout')
-            const stderrListener = getDataListener('stderr')
-            const errorListener = (err) => listener.error(err)
-            // https://nodejs.org/api/child_process.html#child_process_class_childprocess
-            // proc.stdout.setEncoding('utf8')
-            proc.stdout.on('data', stdoutListener)
-            proc.stderr.on('data', stderrListener)
-            proc.on('error', errorListener)
-            proc.on('error', errorListener)
-            proc.on('close', (code, signal : null | Signal) => {
-              listener.next({meta, code, signal, type: 'close'})
-              proc.stdout.removeListener('data', stdoutListener)
-              proc.stderr.removeListener('data', stderrListener)
-              proc.removeListener('error', errorListener)
-              runningProcesses.delete(proc)
-            })
-            runningProcesses.add(proc)
+        processControl$.subscribe({
+          next: (processAction) => {
+            switch (processAction.type) {
+              case 'spawn': {
+                const {definition} = processAction
+                const {command, args = [], options = {}} = definition
+                // TODO: const options = {stdio: 'inherit', env}
+                const process = spawn(command, args, options)
+                listener.next({definition, type: 'open', process})
+                const getDataListener = (type : 'stdout' | 'stderr') =>
+                  (chunk : string | Buffer) => listener.next({definition, console: chunk.toString(), type})
+                const stdoutListener = getDataListener('stdout')
+                const stderrListener = getDataListener('stderr')
+                const errorListener = (err) => listener.error(err)
+                // https://nodejs.org/api/child_process.html#child_process_class_childprocess
+                // proc.stdout.setEncoding('utf8')
+                process.stdout.on('data', stdoutListener)
+                process.stderr.on('data', stderrListener)
+                process.on('error', errorListener)
+                process.on('error', errorListener)
+                process.on('close', (code, signal : null | Signal) => {
+                  listener.next({definition, code, signal, type: 'close'})
+                  process.stdout.removeListener('data', stdoutListener)
+                  process.stderr.removeListener('data', stderrListener)
+                  process.removeListener('error', errorListener)
+                  runningProcesses.delete(definition)
+                })
+                runningProcesses.set(definition, process)
 
-            const getSignalForwarder = (signal : Signal) => () => runningProcesses.forEach(child => treeKill(child.pid, signal))
-            forwardedSignals.forEach(signal => process.on(signal, getSignalForwarder(signal)))
+                const getSignalForwarder = (signal : Signal) => () => runningProcesses.forEach(child => treeKill(child.pid, signal))
+                forwardedSignals.forEach(signal => process.on(signal, getSignalForwarder(signal)))
+                break
+              }
+              case 'kill': {
+                const {definition, signal = 'SIGTERM'} = processAction
+                const process = runningProcesses.get(processAction.definition)
+                if (process) {
+                  treeKill(process.pid, signal, (error : Error) => error ?
+                    listener.error({type: 'killed', definition, signal, process, error}) :
+                    listener.next({type: 'killed', definition, signal, process})
+                  )
+                }
+                break
+              }
+              default:
+            }
           },
           error: (e) => undefined,
           complete: () => listener.complete()
