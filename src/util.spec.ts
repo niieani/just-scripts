@@ -8,7 +8,7 @@ function cleanEnvForTest(definitions : Array<SpawnDefinition>) {
 }
 
 function cleanSpawnForTest(spawnTrigger? : SpawnOnce) {
-  return spawnTrigger ? {...spawnTrigger, meta: omit(['trigger', 'meta', 'options'], spawnTrigger.meta)} : undefined
+  return spawnTrigger ? {...spawnTrigger, meta: omit(['trigger', 'meta', 'options'], spawnTrigger.definition)} : undefined
 }
 
 describe('convertCommandToSpawnDefinition', () => {
