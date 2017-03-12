@@ -165,16 +165,23 @@ export default function start(commandDefinition : CommandDefinition) {
       .map(c => c.definition)
       .fold((acc, t) => [...acc, t], [] as Array<SpawnDefinition>)
 
-    // const start$ = commands$
-    //   .filter(c => c.type === 'open')
-    //   .fold((acc, t) => [...acc, t.definition.id], [] as Array<Array<number>>)
+    const successful$ = commands$
+      .filter(c => c.type === 'close' && c.code === 0)
+      .map(c => c.definition)
+
+    const failed$ = commands$
+      .filter(c => c.type === 'close' && c.code > 0)
+      .map(c => c.definition)
+
+    const endedCommand$ = xs.merge(successful$, failed$)
+
+    const endedCommands$ = endedCommand$
+      .fold((acc, t) => [...acc, t], [] as Array<SpawnDefinition>)
 
     const notStartedConditionalCommands$ = xs
       .combine(started$, conditionalCommands$)
       .map(([startedCommands, conditionalCommands]) =>
         difference(conditionalCommands, startedCommands))
-
-    // ...(t.definition.emit && t.definition.emit.onSuccess)
 
     const reactions$ = commands$
       .filter(c => c.type === 'close' && !!c.definition.emit)
@@ -187,50 +194,31 @@ export default function start(commandDefinition : CommandDefinition) {
       ))
       .flatten()
 
-    const allSuccessIds$ = reactions$
+    const markedAsSuccessfulIds$ = reactions$
       .filter(c => c.type === 'success')
       .fold((acc, t) => [...acc, t.id], [] as Array<Array<number | string>>)
 
-    const endedCommand$ = commands$
-      .filter(c => c.type === 'close')
-      .map(c => c.definition)
-
-    const endedCommands$ = endedCommand$
-      .fold((acc, t) => [...acc, t], [] as Array<SpawnDefinition>)
-
-    const failedId$ = reactions$
+    const markedAsFailedIds$ = reactions$
       .filter(c => c.type === 'fail')
-      .map(c => c.id)
-      // .fold((acc, t) => [...acc, t.id], [] as Array<Array<number | string>>)
+      .fold((acc, t) => [...acc, t.id], [] as Array<Array<number | string>>)
 
-    const failedIds$ = failedId$
-      .fold((acc, t) => [...acc, t], [] as Array<Array<number | string>>)
-
-    const failed$ = xs
-      .combine(started$, failedIds$)
+    const markedAsFailed$ = xs
+      .combine(started$, markedAsFailedIds$)
       .map(([started, failedIds]) =>
         started.filter(({id}) =>
           failedIds.some(failedId => equals(failedId, id))
         )
       )
 
-    const unclosedFailedViaEmit$ = xs
-      .combine(failed$, endedCommands$)
+    const stillRunningMarkedAsFailed$ = xs
+      .combine(markedAsFailed$, endedCommands$)
       .map(([failed, ended]) => xs.fromArray(
         difference(failed, ended)
       ))
       .flatten()
 
-    // const successId$ = commands$
-    //   .filter(c => c.type === 'close' && c.code === 0)
-    //   .fold((acc, t) => [...acc, t.definition.id], [] as Array<Array<number | string>>)
-
-    // const failedId$ = commands$
-    //   .filter(c => c.type === 'close' && c.code > 0)
-    //   .fold((acc, t) => [...acc, t.definition.id], [] as Array<Array<number | string>>)
-
     const conditionalCommandsToStartNow$ = xs
-      .combine(allSuccessIds$, notStartedConditionalCommands$)
+      .combine(markedAsSuccessfulIds$, notStartedConditionalCommands$)
       .map(([successfulIds, notStarted]) =>
         xs.fromArray(notStarted
           .filter(command =>
@@ -252,13 +240,14 @@ export default function start(commandDefinition : CommandDefinition) {
       .flatten()
 
     const terminalOutput$ = commands$
-      .map(c => ({log: JSON.stringify(c.type === 'close' && c.definition.emit) + '\n'}))
+      .filter(c => c.type === 'stdout' || c.type === 'stderr')
+      .map(c => ({log: JSON.stringify((c.type === 'stdout' || c.type === 'stderr') && c.console) + '\n'}))
 
     const commandsToSpawn$ = xs
         .merge(unconditionalCommand$, conditionalCommandsToStartNow$)
         .map(definition => ({type: 'spawn', definition} as ProcessControl))
 
-    const commandsToKill$ = unclosedFailedViaEmit$
+    const commandsToKill$ = stillRunningMarkedAsFailed$
       .map(definition => ({type: 'kill', definition} as ProcessControl))
 
     return {

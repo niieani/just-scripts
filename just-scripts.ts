@@ -6,10 +6,18 @@ export default {
   },
   twoEcho: {
     chain: [
-      {command: 'echo hello1'},
-      {command: 'bash -c "sleep 1 && echo yo1"'},
-      {command: 'bash -c "sleep 1 && echo yo2"'},
+      {command: 'echo 1'},
+      {command: 'bash -c "sleep 1 && echo 2"'},
+      {command: 'bash -c "sleep 1 && echo 3"'},
     ],
-    chainType: 'concurrently'
+    chainType: 'concurrent'
+  },
+  threeEcho: {
+    chain: [
+      {command: 'echo 1'},
+      {command: 'echo 2'},
+      {command: 'echo 3'},
+    ],
+    chainType: 'and'
   },
 } as WithSubCommand
