@@ -1,10 +1,11 @@
 import xs, {Stream, MemoryStream} from 'xstream'
 import {run} from '@cycle/run'
-import {makeSpawnDriver, SpawnDefinition, CommandSpawnEmit, SpawnOnce} from './spawn'
+import {makeSpawnDriver, SpawnDefinition, ProcessControl, CommandSpawnEmit, SpawnOnce} from './spawn'
 import {makeTerminalDriver, TerminalLogDefinition, TerminalEmit} from './terminal'
 import { CommandDefinition, CommandDefinitionArray, ChainType, WithSubCommand, WithSingleTask, WithEnv, WithChainTask } from './definition'
 import {getCommandFromString, mergeEnvPreservingPaths, getEnvWithBin} from './util'
-import {uniq} from 'ramda'
+import {uniq, difference, equals} from 'ramda'
+import sampleCombine from 'xstream/extra/sampleCombine'
 // WithSubCommand,
 // import {adapt} from '@cycle/run/lib/adapt'
 
@@ -18,7 +19,7 @@ interface Sources {
 }
 
 interface Sinks {
-  commands$ : Stream<SpawnDefinition>,
+  commands$ : Stream<ProcessControl>,
   terminal$ : Stream<TerminalLogDefinition>,
 }
 
@@ -143,18 +144,125 @@ export function convertCommandToSpawnDefinition(name : string, descriptor : Comm
   }
 }
 
+// [1, 2, 3]; [2, 3, 4]
+// anyOf: [[1, 2, 3]]
+
 export default function start(commandDefinition : CommandDefinition) {
   const {tasks} = convertCommandToSpawnDefinition('main', commandDefinition)
+  // console.log(tasks)
   function main ({commands$, terminal$} : Sources) : Sinks {
     const inputCommand$ = xs.fromArray(tasks)
+    const unconditionalCommand$ = inputCommand$.filter(t => !t.once)
+    const conditionalCommand$ = inputCommand$.filter(t => !!t.once)
+
+    const conditionalCommands$ = conditionalCommand$
+      .fold((acc, t) => [...acc, t], [] as Array<SpawnDefinition>)
 
     // const mirrorInput = terminal$.map(io => ({log: ' :: ' + io.stdin.toString()}))
 
+    const started$ = commands$
+      .filter(c => c.type === 'open')
+      .map(c => c.definition)
+      .fold((acc, t) => [...acc, t], [] as Array<SpawnDefinition>)
+
+    // const start$ = commands$
+    //   .filter(c => c.type === 'open')
+    //   .fold((acc, t) => [...acc, t.definition.id], [] as Array<Array<number>>)
+
+    const notStartedConditionalCommands$ = xs
+      .combine(started$, conditionalCommands$)
+      .map(([startedCommands, conditionalCommands]) =>
+        difference(conditionalCommands, startedCommands))
+
+    // ...(t.definition.emit && t.definition.emit.onSuccess)
+
+    const reactions$ = commands$
+      .filter(c => c.type === 'close' && !!c.definition.emit)
+      .map(c => xs.fromArray(c.type === 'close' && !!c.definition.emit &&
+        (
+          (c.code === 0 && c.definition.emit.onSuccess)
+          ||
+          (c.code > 0 && c.definition.emit.onFail)
+        ) || []
+      ))
+      .flatten()
+
+    const allSuccessIds$ = reactions$
+      .filter(c => c.type === 'success')
+      .fold((acc, t) => [...acc, t.id], [] as Array<Array<number | string>>)
+
+    const endedCommand$ = commands$
+      .filter(c => c.type === 'close')
+      .map(c => c.definition)
+
+    const endedCommands$ = endedCommand$
+      .fold((acc, t) => [...acc, t], [] as Array<SpawnDefinition>)
+
+    const failedId$ = reactions$
+      .filter(c => c.type === 'fail')
+      .map(c => c.id)
+      // .fold((acc, t) => [...acc, t.id], [] as Array<Array<number | string>>)
+
+    const failedIds$ = failedId$
+      .fold((acc, t) => [...acc, t], [] as Array<Array<number | string>>)
+
+    const failed$ = xs
+      .combine(started$, failedIds$)
+      .map(([started, failedIds]) =>
+        started.filter(({id}) =>
+          failedIds.some(failedId => equals(failedId, id))
+        )
+      )
+
+    const unclosedFailedViaEmit$ = xs
+      .combine(failed$, endedCommands$)
+      .map(([failed, ended]) => xs.fromArray(
+        difference(failed, ended)
+      ))
+      .flatten()
+
+    // const successId$ = commands$
+    //   .filter(c => c.type === 'close' && c.code === 0)
+    //   .fold((acc, t) => [...acc, t.definition.id], [] as Array<Array<number | string>>)
+
+    // const failedId$ = commands$
+    //   .filter(c => c.type === 'close' && c.code > 0)
+    //   .fold((acc, t) => [...acc, t.definition.id], [] as Array<Array<number | string>>)
+
+    const conditionalCommandsToStartNow$ = xs
+      .combine(allSuccessIds$, notStartedConditionalCommands$)
+      .map(([successfulIds, notStarted]) =>
+        xs.fromArray(notStarted
+          .filter(command =>
+            command.once &&
+            (
+              (
+                command.once.anyOf &&
+                command.once.anyOf.some(id => successfulIds.some(sId => equals(id, sId)))
+              )
+              ||
+              (
+                command.once.allOf &&
+                command.once.allOf.every(id => successfulIds.some(sId => equals(id, sId)))
+              )
+            )
+          )
+        )
+      )
+      .flatten()
+
     const terminalOutput$ = commands$
-      .map(c => ({log: JSON.stringify(c.type === 'stdout' && c.console) + '\n'}))
+      .map(c => ({log: JSON.stringify(c.type === 'close' && c.definition.emit) + '\n'}))
+
+    const commandsToSpawn$ = xs
+        .merge(unconditionalCommand$, conditionalCommandsToStartNow$)
+        .map(definition => ({type: 'spawn', definition} as ProcessControl))
+
+    const commandsToKill$ = unclosedFailedViaEmit$
+      .map(definition => ({type: 'kill', definition} as ProcessControl))
 
     return {
-      commands$: inputCommand$,
+      commands$: xs.merge(commandsToSpawn$, commandsToKill$),
       // terminal$: xs.merge(terminalOutput$, mirrorInput),
       terminal$: terminalOutput$,
     }
